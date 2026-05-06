@@ -1,0 +1,45 @@
+
+- name: Prompt for Ansible username and password
+  hosts: localhost
+  gather_facts: false
+  vars_prompt:
+    - name: ansible_user
+      prompt: "Enter the Ansible username"
+      private: false
+    - name: ansible_password
+      prompt: "Enter the Ansible password"
+      private: true
+  tasks:
+    - name: Set connection credentials for all hosts
+      add_host:
+        name: "{{ item }}"
+        ansible_user: "{{ ansible_user }}"
+        ansible_ssh_pass: "{{ ansible_password }}"
+      loop: "{{ groups['all'] }}"
+
+# RKE2 cluster deployment
+# Run: ansible-playbook -i ../inventory.ini site.yml
+# (from the playbooks/ directory, or use the ansible.cfg at the rke2/ root)
+
+- name: Prerequisites — all nodes
+  hosts: server:agent
+  become: true
+  gather_facts: true
+  roles:
+    - prereq
+
+- name: Deploy RKE2 servers
+  hosts: server
+  become: true
+  gather_facts: true
+  # Serial is critical: init the first server before others try to join.
+  serial: 1
+  roles:
+    - rke2_server
+
+- name: Deploy RKE2 agents
+  hosts: agent
+  become: true
+  gather_facts: true
+  roles:
+    - rke2_agent

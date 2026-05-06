@@ -1,0 +1,277 @@
+---
+- name: Prompt for Ansible username and password
+  hosts: localhost
+  gather_facts: false
+  vars_prompt:
+    - name: ansible_user
+      prompt: "Enter the Ansible username"
+      private: false
+    - name: ansible_password
+      prompt: "Enter the Ansible password"
+      private: true
+    - name: confirm_reset
+      prompt: "\n⚠️  WARNING: This will COMPLETELY DESTROY the RKE2 cluster and ALL DATA! ⚠️\n\nThis action will:\n- Stop all RKE2 services\n- Delete all Kubernetes data and configurations\n- Remove all container images and volumes\n- Wipe network configurations\n- Reboot all nodes\n\nType 'DESTROY' (all caps) to confirm"
+      private: false
+  tasks:
+    - name: Verify destruction confirmation
+      ansible.builtin.fail:
+        msg: "Reset operation cancelled. You must type 'DESTROY' exactly to proceed."
+      when: confirm_reset != "DESTROY"
+    
+    - name: Set connection credentials for all hosts
+      add_host:
+        name: "{{ item }}"
+        ansible_user: "{{ ansible_user }}"
+        ansible_ssh_pass: "{{ ansible_password }}"
+      loop: "{{ groups['all'] }}"
+
+- name: Reset RKE2 cluster completely
+  hosts: server:agent
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Stop and disable RKE2 services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+        daemon_reload: true
+      failed_when: false
+      loop:
+        - rke2-server
+        - rke2-agent
+        - rke2-server.service
+        - rke2-agent.service
+
+    - name: Kill any remaining RKE2 processes
+      ansible.builtin.shell: |
+        pkill -9 -f rke2 || true
+        pkill -9 -f containerd || true
+        pkill -9 -f kubelet || true
+        pkill -9 -f "k8s.io" || true
+      changed_when: false
+      failed_when: false
+
+    - name: Kill containerd-shim processes
+      ansible.builtin.shell: |
+        pkill -9 -f "containerd-shim" || true
+        pkill -9 -f "runc" || true
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for processes to terminate
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Get list of RKE2 related mount points
+      ansible.builtin.shell: |
+        mount | grep -E "(rke2|rancher|kubelet)" | awk '{print $3}' | sort -r || true
+      register: rke2_mounts
+      changed_when: false
+      failed_when: false
+
+    - name: Unmount RKE2 filesystems
+      ansible.builtin.mount:
+        path: "{{ item }}"
+        state: unmounted
+      loop: "{{ rke2_mounts.stdout_lines }}"
+      failed_when: false
+
+    - name: Force unmount any remaining RKE2 mounts
+      ansible.builtin.shell: |
+        umount -f {{ item }} || true
+        umount -l {{ item }} || true
+      loop:
+        - /var/lib/kubelet/pods
+        - /var/lib/kubelet
+        - /run/netns/cni-*
+        - /var/lib/rancher/rke2
+        - /run/containerd
+      failed_when: false
+      changed_when: false
+
+    - name: Remove RKE2 system service files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/rke2-server.service
+        - /etc/systemd/system/rke2-agent.service
+        - /etc/systemd/system/rke2-server.service.env
+        - /etc/systemd/system/rke2-agent.service.env
+        - /usr/local/lib/systemd/system/rke2-server.service
+        - /usr/local/lib/systemd/system/rke2-agent.service
+
+    - name: Remove RKE2 binaries and tools
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/bin/rke2
+        - /usr/local/bin/rke2-killall.sh
+        - /usr/local/bin/rke2-uninstall.sh
+        - /var/lib/rancher/rke2/bin
+        - /opt/rke2
+        - /usr/local/share/rke2
+
+    - name: Remove RKE2 configuration directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher/rke2
+        - /etc/rancher/node
+        - /etc/cni
+        - /opt/cni
+
+    - name: Remove RKE2 data directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/rancher/rke2
+        - /var/lib/rancher/credentialprovider
+        - /var/lib/kubelet
+        - /var/lib/cni
+        - /var/cache/rancher
+        - /var/log/containers
+        - /var/log/pods
+
+    - name: Remove container runtime data
+      ansible.builtin.shell: |
+        # Remove runtime directories with better error handling
+        for dir in /run/containerd /var/lib/containerd /run/rke2 /run/flannel /run/cilium; do
+          if [ -d "$dir" ]; then
+            rm -rf "$dir" || echo "Failed to remove $dir, continuing..."
+          fi
+        done
+      failed_when: false
+      changed_when: false
+
+    - name: Remove network namespaces
+      ansible.builtin.shell: |
+        ip netns list | grep cni- | xargs -r -n1 ip netns delete || true
+        rm -rf /run/netns/cni-* || true
+        rm -rf /var/run/netns/* || true
+      failed_when: false
+      changed_when: false
+
+    - name: Clean up network interfaces
+      ansible.builtin.shell: |
+        # Remove flannel interfaces
+        ip link show | grep flannel | awk -F: '{print $2}' | xargs -r -n1 ip link delete || true
+        # Remove CNI interfaces  
+        ip link show | grep cni | awk -F: '{print $2}' | xargs -r -n1 ip link delete || true
+        # Remove veth pairs
+        ip link show | grep veth | awk -F: '{print $2}' | xargs -r -n1 ip link delete || true
+        # Remove cilium interfaces
+        ip link show | grep cilium | awk -F: '{print $2}' | xargs -r -n1 ip link delete || true
+      failed_when: false
+      changed_when: false
+
+    - name: Remove iptables rules (IPv4)
+      ansible.builtin.shell: |
+        # Remove RKE2/Kubernetes chains
+        iptables-save | grep -v KUBE | grep -v CNI | grep -v flannel | iptables-restore || true
+        # Flush and delete custom chains
+        iptables -t filter -F || true
+        iptables -t filter -X || true
+        iptables -t nat -F || true
+        iptables -t nat -X || true
+        iptables -t mangle -F || true
+        iptables -t mangle -X || true
+      failed_when: false
+      changed_when: false
+
+    - name: Remove iptables rules (IPv6)
+      ansible.builtin.shell: |
+        # Remove RKE2/Kubernetes chains for IPv6
+        ip6tables-save | grep -v KUBE | grep -v CNI | grep -v flannel | ip6tables-restore || true
+        # Flush and delete custom chains
+        ip6tables -t filter -F || true
+        ip6tables -t filter -X || true
+        ip6tables -t nat -F || true
+        ip6tables -t nat -X || true
+        ip6tables -t mangle -F || true
+        ip6tables -t mangle -X || true
+      failed_when: false
+      changed_when: false
+
+    - name: Clean up system packages (if installed via package manager)
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - rke2-server
+        - rke2-agent
+        - rke2-common
+      failed_when: false
+
+    - name: Remove SELinux contexts (RHEL/CentOS)
+      ansible.builtin.shell: |
+        semanage fcontext -d -t container_exec_t "/var/lib/rancher/rke2/bin/.*" || true
+        restorecon -R /var/lib || true
+      failed_when: false
+      changed_when: false
+      when: ansible_os_family == "RedHat"
+
+    - name: Clean up systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Remove any remaining RKE2 processes
+      ansible.builtin.shell: |
+        ps aux | grep -i rke2 | grep -v grep | awk '{print $2}' | xargs -r kill -9 || true
+        ps aux | grep -i containerd | grep -v grep | awk '{print $2}' | xargs -r kill -9 || true
+      failed_when: false
+      changed_when: false
+
+    - name: Clean up temporary files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/rke2*
+        - /tmp/k8s*
+        - /var/tmp/rke2*
+
+    - name: Final cleanup verification
+      ansible.builtin.debug:
+        msg: "RKE2 cleanup completed for {{ inventory_hostname }}"
+
+- name: Reboot all nodes
+  hosts: server:agent  
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Reboot nodes to ensure clean state
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        connect_timeout: 20
+        pre_reboot_delay: 10
+        post_reboot_delay: 30
+        test_command: whoami
+
+    - name: Wait for nodes to be accessible
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 30
+
+    - name: Verify clean state after reboot
+      ansible.builtin.shell: |
+        ! pgrep rke2 && 
+        ! pgrep containerd &&
+        ! systemctl is-enabled rke2-server 2>/dev/null &&
+        ! systemctl is-enabled rke2-agent 2>/dev/null
+      changed_when: false
+      register: verify_clean
+
+    - name: Confirmation message
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} has been successfully reset and rebooted. No RKE2 components remain."
+      when: verify_clean.rc == 0
+
+    - name: Warning if cleanup incomplete
+      ansible.builtin.debug:
+        msg: "WARNING: {{ inventory_hostname }} may still have RKE2 processes or services running!"
+      when: verify_clean.rc != 0

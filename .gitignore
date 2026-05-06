@@ -1,0 +1,28 @@
+# Terraform working directories
+**/.terraform/*
+
+# Terraform state (contains resource IDs and may contain sensitive data)
+*.tfstate
+*.tfstate.*
+
+# Variable files commonly used for secrets
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+# Local Terraform CLI config that may contain credentials
+.terraformrc
+terraform.rc
+
+# Plan files can include sensitive values
+*.tfplan
+*.plan
+
+# Crash and override files
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

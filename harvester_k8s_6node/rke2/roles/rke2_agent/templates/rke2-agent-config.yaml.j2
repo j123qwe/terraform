@@ -1,0 +1,16 @@
+# Managed by Ansible — do not edit by hand
+# Node: {{ inventory_hostname }}
+
+token: {{ rke2_node_token }}
+
+# Join via the cluster supervisor endpoint (VIP/load balancer)
+server: "https://{{ cluster_fqdn }}:{{ registration_port }}"
+
+# Management interface IP for node registration
+node-ip: "{{ ansible_host }}"
+
+# Node labels
+node-label:
+{% for label in node_labels | default([]) %}
+  - "{{ label }}"
+{% endfor %}

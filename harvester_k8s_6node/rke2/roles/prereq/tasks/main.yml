@@ -1,0 +1,170 @@
+---
+- name: Enforce minimum Ansible version
+  ansible.builtin.assert:
+    that:
+      - ansible_version.full is version('2.14', '>=')
+    msg: "Minimum ansible-core version required is 2.14"
+
+# ------------------------------------------------------------------
+# Package dependencies
+# ------------------------------------------------------------------
+- name: Install required packages (Ubuntu/Debian)
+  when: ansible_facts['os_family'] == 'Debian'
+  ansible.builtin.apt:
+    name:
+      - curl
+      - iptables
+      - open-iscsi   # needed if using iSCSI-backed storage later
+      - nfs-common   # needed if using NFS-backed storage later
+    state: present
+    update_cache: true
+
+- name: Install required packages (RHEL/Rocky)
+  when: ansible_facts['os_family'] == 'RedHat'
+  ansible.builtin.dnf:
+    name:
+      - curl
+      - iptables
+      - iscsi-initiator-utils
+      - nfs-utils
+    state: present
+
+# ------------------------------------------------------------------
+# Kernel modules
+# ------------------------------------------------------------------
+- name: Persist kernel modules across reboots
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rke2.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+- name: Load br_netfilter
+  community.general.modprobe:
+    name: br_netfilter
+    state: present
+
+- name: Load overlay
+  community.general.modprobe:
+    name: overlay
+    state: present
+
+# ------------------------------------------------------------------
+# Sysctl — networking
+# ------------------------------------------------------------------
+- name: Set sysctl parameters for Kubernetes networking
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - { name: "net.ipv4.ip_forward",                  value: "1" }
+    - { name: "net.ipv6.conf.all.forwarding",          value: "1" }
+    - { name: "net.bridge.bridge-nf-call-iptables",   value: "1" }
+    - { name: "net.bridge.bridge-nf-call-ip6tables",  value: "1" }
+    - { name: "fs.inotify.max_user_watches",           value: "524288" }
+    - { name: "fs.inotify.max_user_instances",         value: "512" }
+
+# ------------------------------------------------------------------
+# Swap — kubelet requires swap to be disabled unless explicitly
+# configured otherwise.
+# ------------------------------------------------------------------
+- name: Disable swap immediately
+  when: (ansible_facts['swaptotal_mb'] | default(0) | int) > 0
+  ansible.builtin.command: swapoff -a
+  changed_when: true
+
+- name: Disable swap entries in /etc/fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\s+swap\s+.*)$'
+    replace: '# \1'
+
+# ------------------------------------------------------------------
+# Firewall — open required ports
+# ------------------------------------------------------------------
+- name: Populate service facts
+  ansible.builtin.service_facts:
+
+- name: Open RKE2 ports via UFW
+  when:
+    - ansible_facts.services['ufw'] is defined
+    - ansible_facts.services['ufw'].state == 'running'
+  block:
+    - name: Get UFW status
+      ansible.builtin.command: ufw status
+      changed_when: false
+      register: prereq_ufw_status
+
+    - name: Open ports (UFW)
+      when: "'Status: active' in prereq_ufw_status.stdout"
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop:
+        - { port: "6443",      proto: "tcp", comment: "Kubernetes API" }
+        - { port: "9345",      proto: "tcp", comment: "RKE2 supervisor" }
+        - { port: "2379:2381", proto: "tcp", comment: "etcd" }
+        - { port: "10250",     proto: "tcp", comment: "kubelet" }
+        - { port: "8472",      proto: "udp", comment: "VXLAN (Cilium tunnel)" }
+        - { port: "4240",      proto: "tcp", comment: "Cilium health" }
+        - { port: "4244",      proto: "tcp", comment: "Hubble server" }
+        - { port: "4245",      proto: "tcp", comment: "Hubble relay" }
+        - { port: "12000",     proto: "udp", comment: "Cilium VXLAN" }
+
+    - name: Allow cluster CIDRs (UFW)
+      when: "'Status: active' in prereq_ufw_status.stdout"
+      community.general.ufw:
+        rule: allow
+        src: "{{ item }}"
+      loop:
+        - "{{ cluster_cidr }}"
+        - "{{ service_cidr }}"
+
+- name: Open RKE2 ports via firewalld
+  when:
+    - ansible_facts.services['firewalld.service'] is defined
+    - ansible_facts.services['firewalld.service'].state == 'running'
+  block:
+    - name: Open ports (firewalld)
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        zone: internal
+        state: enabled
+        permanent: true
+        immediate: true
+      loop:
+        - "6443/tcp"
+        - "9345/tcp"
+        - "2379-2381/tcp"
+        - "10250/tcp"
+        - "8472/udp"
+        - "4240/tcp"
+        - "4244/tcp"
+        - "4245/tcp"
+        - "12000/udp"
+
+    - name: Allow cluster CIDRs (firewalld)
+      ansible.posix.firewalld:
+        source: "{{ item }}"
+        zone: trusted
+        state: enabled
+        permanent: true
+        immediate: true
+      loop:
+        - "{{ cluster_cidr }}"
+        - "{{ service_cidr }}"
+
+# ------------------------------------------------------------------
+# PATH — make RKE2 binaries available to the ansible user
+# ------------------------------------------------------------------
+- name: Add RKE2 bin directory to PATH
+  ansible.builtin.lineinfile:
+    path: "~{{ ansible_user }}/.bashrc"
+    regexp: 'export PATH=.*rancher/rke2/bin'
+    line: 'export PATH=$PATH:/var/lib/rancher/rke2/bin:/usr/local/bin  # Added by rke2-ansible'
+    state: present

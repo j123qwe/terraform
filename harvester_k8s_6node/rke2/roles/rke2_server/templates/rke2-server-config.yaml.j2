@@ -1,0 +1,57 @@
+# Managed by Ansible — do not edit by hand
+# Node: {{ inventory_hostname }}
+
+token: {{ rke2_token }}
+
+{% if inventory_hostname == groups[server_group][0] %}
+# First server: bootstrap the embedded etcd cluster
+cluster-init: true
+{% else %}
+# Subsequent servers: join via the cluster supervisor endpoint (VIP/load balancer)
+server: "https://{{ cluster_fqdn }}:{{ registration_port }}"
+{% endif %}
+
+# -----------------------------------------------------------------
+# TLS SANs — add every name or IP that clients will use
+# -----------------------------------------------------------------
+tls-san:
+  - "{{ cluster_fqdn }}"
+{% for host in groups[server_group] %}
+  - "{{ hostvars[host]['ansible_host'] }}"
+{% endfor %}
+
+# -----------------------------------------------------------------
+# Networking
+# -----------------------------------------------------------------
+# Cilium is the CNI; kube-proxy is replaced by Cilium's eBPF datapath
+cni: cilium
+disable-kube-proxy: true
+
+cluster-cidr: "{{ cluster_cidr }}"
+service-cidr: "{{ service_cidr }}"
+
+# Extended service port range for NodePort services
+service-node-port-range: "{{ service_node_port_range | default('6789-40000') }}"
+
+# Management interface IP — used for API server, etcd, node registration
+node-ip: "{{ ansible_host }}"
+
+# -----------------------------------------------------------------
+# Prevent user workloads from running on server nodes.
+# Only pods that tolerate CriticalAddonsOnly (system daemonsets such
+# as Cilium, CoreDNS, kube-proxy replacement, etc.) will be scheduled
+# here. See https://docs.rke2.io/install/ha#2a-optional-consider-server-node-taints
+# -----------------------------------------------------------------
+node-taint:
+  - "CriticalAddonsOnly=true:NoExecute"
+
+# -----------------------------------------------------------------
+# Disabled built-in components
+# -----------------------------------------------------------------
+disable:
+  - rke2-ingress-nginx   # Traefik will be installed separately
+
+# -----------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------
+write-kubeconfig-mode: "0644"

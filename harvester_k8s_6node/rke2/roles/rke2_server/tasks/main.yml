@@ -1,0 +1,272 @@
+---
+# ------------------------------------------------------------------
+# Version check — skip download if already on the right version
+# ------------------------------------------------------------------
+- name: Check installed RKE2 version
+  ansible.builtin.command: rke2 --version
+  register: rke2_installed_version_output
+  changed_when: false
+  failed_when: false
+
+- name: Parse installed RKE2 version
+  when: rke2_installed_version_output.rc == 0
+  ansible.builtin.set_fact:
+    rke2_installed_version: >-
+      {{ rke2_installed_version_output.stdout_lines[0].split(' ')[2] | default('') }}
+
+- name: Detect whether this server requires an upgrade
+  ansible.builtin.set_fact:
+    rke2_upgrade_requested: >-
+      {{
+        rke2_installed_version_output.rc == 0 and
+        (rke2_installed_version is defined) and
+        (rke2_installed_version | length > 0) and
+        (rke2_installed_version is version(rke2_version, '<'))
+      }}
+
+# ------------------------------------------------------------------
+# Install RKE2 server
+# ------------------------------------------------------------------
+- name: Download and install RKE2 server
+  when: >
+    rke2_installed_version_output.rc != 0 or
+    (rke2_installed_version is defined and
+     rke2_installed_version is version(rke2_version, '<'))
+  ansible.builtin.shell:
+    cmd: curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION={{ rke2_version }} INSTALL_RKE2_TYPE=server sh -
+  register: rke2_server_install_result
+  changed_when: true
+
+# ------------------------------------------------------------------
+# Configuration directories
+# ------------------------------------------------------------------
+- name: Create RKE2 config directory
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create RKE2 manifests directory
+  ansible.builtin.file:
+    path: /var/lib/rancher/rke2/server/manifests
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# ------------------------------------------------------------------
+# Cilium HelmChartConfig — must land before the server starts so
+# RKE2 picks it up during the initial Cilium Helm release.
+# ------------------------------------------------------------------
+- name: Deploy Cilium HelmChartConfig
+  ansible.builtin.template:
+    src: rke2-cilium-config.yaml.j2
+    dest: /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  register: cilium_config_result
+
+# ------------------------------------------------------------------
+# Server config
+# ------------------------------------------------------------------
+- name: Deploy RKE2 server config
+  ansible.builtin.template:
+    src: rke2-server-config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  register: server_config_result
+
+# ------------------------------------------------------------------
+# First server — bootstrap
+# ------------------------------------------------------------------
+- name: Bootstrap first server
+  when: inventory_hostname == groups[server_group][0]
+  block:
+    - name: Enable and start rke2-server (first server)
+      ansible.builtin.systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Save ETCD snapshot before upgrade (first server)
+      when: rke2_upgrade_requested | default(false)
+      ansible.builtin.command:
+        cmd: >-
+          /var/lib/rancher/rke2/bin/rke2 etcd-snapshot save
+          --name pre-upgrade-{{ ansible_date_time.iso8601_basic_short }}
+      register: rke2_preupgrade_snapshot
+      until: rke2_preupgrade_snapshot.rc == 0
+      retries: 6
+      delay: 10
+      changed_when: true
+
+    - name: Restart rke2-server if config changed (first server)
+      when:
+        - server_config_result.changed or cilium_config_result.changed or (rke2_server_install_result is defined and rke2_server_install_result.changed)
+        - ansible_facts.services['rke2-server.service'] is defined
+        - ansible_facts.services['rke2-server.service'].state == 'running'
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for node-token to be created
+      ansible.builtin.wait_for:
+        path: /var/lib/rancher/rke2/server/node-token
+        timeout: 120
+
+    - name: Read node-token from first server
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/rke2/server/node-token
+      register: rke2_node_token_raw
+
+    - name: Store node-token as a fact (shared with all plays)
+      ansible.builtin.set_fact:
+        rke2_node_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
+
+    - name: Wait for API server to become ready
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ api_port }}"
+        timeout: 180
+
+    - name: Pause to let the first server fully initialise
+      ansible.builtin.pause:
+        seconds: 15
+
+# ------------------------------------------------------------------
+# Additional servers — join the cluster
+# ------------------------------------------------------------------
+- name: Join additional servers
+  when: inventory_hostname != groups[server_group][0]
+  block:
+    # Read directly from the filesystem so joining a server works even if
+    # the first-server block didn't run in this same Ansible invocation.
+    - name: Read node-token from first server filesystem
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/rke2/server/node-token
+      register: rke2_node_token_raw
+      delegate_to: "{{ groups[server_group][0] }}"
+
+    - name: Set node-token fact
+      ansible.builtin.set_fact:
+        rke2_node_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
+
+    - name: Enable and start rke2-server (joining server)
+      ansible.builtin.systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Restart rke2-server if config changed (joining server)
+      when:
+        - server_config_result.changed or cilium_config_result.changed or (rke2_server_install_result is defined and rke2_server_install_result.changed)
+        - ansible_facts.services['rke2-server.service'] is defined
+        - ansible_facts.services['rke2-server.service'].state == 'running'
+      ansible.builtin.systemd:
+        name: rke2-server
+        state: restarted
+        daemon_reload: true
+
+    - name: Wait for this server's API port to be ready
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ api_port }}"
+        timeout: 180
+
+    - name: Verify all server nodes are Ready
+      ansible.builtin.command:
+        cmd: >
+          /var/lib/rancher/rke2/bin/kubectl
+          --kubeconfig /etc/rancher/rke2/rke2.yaml
+          get nodes -l node-role.kubernetes.io/control-plane=true
+          -o jsonpath='{.items[*].metadata.name}'
+      register: rke2_server_nodes
+      until: >
+        rke2_server_nodes.rc == 0 and
+        (rke2_server_nodes.stdout.split() | length) == (groups[server_group] | length)
+      retries: 24
+      delay: 10
+      changed_when: false
+      when: inventory_hostname == groups[server_group][-1]
+
+# ------------------------------------------------------------------
+# kubeconfig — fetch to the Ansible control node
+# ------------------------------------------------------------------
+- name: Fetch kubeconfig from first server
+  when: inventory_hostname == groups[server_group][0]
+  block:
+    - name: Check whether kubectl is available on control node
+      ansible.builtin.command: kubectl version --client
+      register: kubectl_check
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Fetch kubeconfig
+      ansible.builtin.fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: "{{ kubeconfig }}"
+        flat: true
+      register: kubeconfig_fetched
+
+    - name: Rewrite server address in kubeconfig to cluster FQDN
+      when: kubeconfig_fetched.changed
+      ansible.builtin.shell:
+        cmd: >
+          kubectl config set-cluster default
+          --server=https://{{ cluster_fqdn }}:{{ api_port }}
+          --kubeconfig {{ kubeconfig }}
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Rename kubeconfig context to cluster name
+      when: kubeconfig_fetched.changed
+      ansible.builtin.replace:
+        path: "{{ kubeconfig }}"
+        regexp: '\bdefault\b'
+        replace: "{{ cluster_context }}"
+      delegate_to: localhost
+      become: false
+
+# ------------------------------------------------------------------
+# kubectl convenience — copy to user's ~/.kube on the server nodes
+# ------------------------------------------------------------------
+- name: Create ~/.kube for ansible user on servers
+  ansible.builtin.file:
+    path: "~{{ ansible_user }}/.kube"
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: "0700"
+
+- name: Copy kubeconfig to ansible user home on servers
+  ansible.builtin.copy:
+    src: /etc/rancher/rke2/rke2.yaml
+    dest: "~{{ ansible_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user }}"
+    mode: "0600"
+
+- name: Set KUBECONFIG in .bashrc on servers
+  ansible.builtin.lineinfile:
+    path: "~{{ ansible_user }}/.bashrc"
+    regexp: 'export KUBECONFIG='
+    line: 'export KUBECONFIG=~/.kube/config  # Added by rke2-ansible'
+    state: present
+
+- name: Add kubectl completion to .bashrc on servers
+  ansible.builtin.lineinfile:
+    path: "~{{ ansible_user }}/.bashrc"
+    regexp: 'kubectl completion bash'
+    line: >-
+      source <(/var/lib/rancher/rke2/bin/kubectl completion bash)  # Added by rke2-ansible
+    state: present

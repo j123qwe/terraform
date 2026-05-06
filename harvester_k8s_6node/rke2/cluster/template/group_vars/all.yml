@@ -1,0 +1,52 @@
+---
+# RKE2 version — check https://github.com/rancher/rke2/releases for latest
+rke2_version: "v1.34.4+rke2r1"
+
+# Shared cluster token — change this to a long random secret
+rke2_token: "oQM6VE1kUoGcK2MsJmCdo04CeR2iivN80klH/yPJI1GPk/W/TsxtvdeJP+H4mTj/"
+
+# Group names matching inventory sections
+server_group: "server"
+agent_group: "agent"
+
+# -----------------------------------------------------------------
+# Cluster identity
+# -----------------------------------------------------------------
+# FQDN for the API server — must resolve to the first server IP
+# or a VIP/load-balancer in front of the control plane nodes.
+cluster_fqdn: "rke2-cluster.domain.com"
+
+# Override for Cilium's k8sServiceHost. Cilium's config init container
+# uses this to reach the API server before CoreDNS is running, so it
+# must be an IP if the FQDN is not yet in external DNS.
+# Set back to cluster_fqdn (or remove this line) once DNS is in place.
+cilium_k8s_host: "rke2-cluster.domain.com"
+cluster_context: "rke2-domain"
+
+# Port for the Kubernetes API and the RKE2 supervisor (join) port
+api_port: 6443
+registration_port: 9345
+
+# -----------------------------------------------------------------
+# Cluster networking
+# -----------------------------------------------------------------
+cluster_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+
+# NodePort service port range (default: 30000-32767)
+# Expanded range allows more flexibility for service ports
+service_node_port_range: "6789-40000"
+
+# -----------------------------------------------------------------
+# Node interfaces
+# Management interface: used for Kubernetes API, etcd, node registration.
+# Traffic interface:    used by Cilium for pod-to-pod and NodePort traffic.
+# Adjust these names to match what the OS sees (ip link show).
+# -----------------------------------------------------------------
+mgmt_interface: "ens160"
+traffic_interface: "ens192"
+
+# -----------------------------------------------------------------
+# Local kubeconfig (written to the Ansible control node)
+# -----------------------------------------------------------------
+kubeconfig: "~/.kube/rke2-domain.yaml"

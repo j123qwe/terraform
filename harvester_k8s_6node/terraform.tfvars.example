@@ -1,0 +1,60 @@
+# Base placement/image
+namespace          = "default"
+mac_seed           = "lab-cluster-a"
+image_id           = "default/ubuntu-22.04-cloudimg-amd64"
+
+# Hostnames
+master_hostname_prefix = "k8s-master"
+haproxy_hostname       = "k8s-haproxy-1"
+worker_hostname_prefix = "k8s-worker"
+
+# Node counts
+master_count = 3
+worker_count = 3
+
+# VM access via cloud-init
+vm_username       = "ubuntu"
+vm_ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCyExampleReplaceMe user@example"
+
+# NIC definitions
+nic1_network_name = "default/vlan0"
+nic2_network_name = "default/vlan111"
+
+# NIC1 (VLAN0): IP/mask, gateway, DNS
+nic1_gateway     = "192.168.0.1"
+nic1_dns_servers = ["192.168.0.10", "1.1.1.1"]
+
+haproxy_nic1_cidr = "192.168.0.104/24"
+master_nic1_cidrs = [
+  "192.168.0.101/24",
+  "192.168.0.102/24",
+  "192.168.0.103/24"
+]
+worker_nic1_cidrs = [
+  "192.168.0.111/24",
+  "192.168.0.112/24",
+  "192.168.0.113/24"
+]
+
+# NIC2 (VLAN111): IP/mask only
+master_nic2_cidrs = [
+  "10.111.0.101/24",
+  "10.111.0.102/24",
+  "10.111.0.103/24"
+]
+haproxy_nic2_cidr = "10.111.0.104/24"
+worker_nic2_cidrs = [
+  "10.111.0.111/24",
+  "10.111.0.112/24",
+  "10.111.0.113/24"
+]
+
+# Disk sizes (disk0)
+master_root_disk_size = "50Gi"
+worker_root_disk_size = "100Gi"
+
+# Optional sizing
+master_cpu    = 4
+master_memory = "8Gi"
+worker_cpu    = 2
+worker_memory = "4Gi"

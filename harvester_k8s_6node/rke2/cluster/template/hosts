@@ -1,0 +1,13 @@
+[server]
+rke2-mn01 ansible_host=192.168.86.204 
+rke2-mn02 ansible_host=192.168.86.205 
+rke2-mn03 ansible_host=192.168.86.206 
+
+[agent]
+rke2-wn01 ansible_host=192.168.86.214 
+rke2-wn02 ansible_host=192.168.86.215 
+rke2-wn03 ansible_host=192.168.86.216 
+
+[k3s_cluster:children]
+server
+agent

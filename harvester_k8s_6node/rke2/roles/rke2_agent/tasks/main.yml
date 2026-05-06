@@ -1,0 +1,158 @@
+---
+# ------------------------------------------------------------------
+# Version check
+# ------------------------------------------------------------------
+- name: Check installed RKE2 version
+  ansible.builtin.command: rke2 --version
+  register: rke2_installed_version_output
+  changed_when: false
+  failed_when: false
+
+- name: Parse installed RKE2 version
+  when: rke2_installed_version_output.rc == 0
+  ansible.builtin.set_fact:
+    rke2_installed_version: >-
+      {{ rke2_installed_version_output.stdout_lines[0].split(' ')[2] | default('') }}
+
+- name: Detect whether this agent requires an upgrade
+  ansible.builtin.set_fact:
+    rke2_upgrade_requested: >-
+      {{
+        rke2_installed_version_output.rc == 0 and
+        (rke2_installed_version is defined) and
+        (rke2_installed_version | length > 0) and
+        (rke2_installed_version is version(rke2_version, '<'))
+      }}
+
+# ------------------------------------------------------------------
+# Install RKE2 agent
+# ------------------------------------------------------------------
+- name: Download and install RKE2 agent
+  when: >
+    rke2_installed_version_output.rc != 0 or
+    (rke2_installed_version is defined and
+     rke2_installed_version is version(rke2_version, '<'))
+  ansible.builtin.shell:
+    cmd: curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION={{ rke2_version }} INSTALL_RKE2_TYPE=agent sh -
+  register: rke2_agent_install_result
+  changed_when: true
+
+# ------------------------------------------------------------------
+# Token — read directly from the first server's filesystem so this
+# role works whether invoked via site.yml or standalone (e.g. when
+# adding new workers to an existing cluster with --limit).
+# ------------------------------------------------------------------
+- name: Read node-token from first server filesystem
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/rke2/server/node-token
+  register: rke2_node_token_raw
+  delegate_to: "{{ groups[server_group][0] }}"
+
+- name: Set node-token fact
+  ansible.builtin.set_fact:
+    rke2_node_token: "{{ rke2_node_token_raw.content | b64decode | trim }}"
+
+# ------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------
+- name: Create RKE2 config directory
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deploy RKE2 agent config
+  ansible.builtin.template:
+    src: rke2-agent-config.yaml.j2
+    dest: /etc/rancher/rke2/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  register: agent_config_result
+
+# ------------------------------------------------------------------
+# Service
+# ------------------------------------------------------------------
+- name: Enable and start rke2-agent
+  ansible.builtin.systemd:
+    name: rke2-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Restart rke2-agent if config changed
+  when:
+    - agent_config_result.changed
+    - ansible_facts.services['rke2-agent.service'] is defined
+    - ansible_facts.services['rke2-agent.service'].state == 'running'
+  ansible.builtin.systemd:
+    name: rke2-agent
+    state: restarted
+    daemon_reload: true
+
+- name: Reboot upgraded agent node
+  when: rke2_upgrade_requested | default(false)
+  ansible.builtin.reboot:
+    msg: "Reboot initiated by Ansible after RKE2 upgrade"
+    reboot_timeout: 1800
+    connect_timeout: 30
+    post_reboot_delay: 20
+
+# Stage 1: confirm the node has registered at all (rc 0 = node object exists)
+- name: Wait for agent node to appear in the cluster
+  ansible.builtin.command:
+    cmd: >
+      /var/lib/rancher/rke2/bin/kubectl
+      --kubeconfig /etc/rancher/rke2/rke2.yaml
+      get node {{ inventory_hostname }}
+      --no-headers
+  register: rke2_agent_node_exists
+  until: rke2_agent_node_exists.rc == 0
+  retries: 18
+  delay: 10
+  changed_when: false
+  delegate_to: "{{ groups[server_group][0] }}"
+
+# Stage 2: wait for Cilium to finish initialising and flip the node Ready.
+# Cilium pulls several images (relay, UI) on first boot — allow 10 minutes.
+- name: Wait for agent node to become Ready
+  ansible.builtin.command:
+    cmd: >
+      /var/lib/rancher/rke2/bin/kubectl
+      --kubeconfig /etc/rancher/rke2/rke2.yaml
+      get node {{ inventory_hostname }}
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+  register: rke2_agent_node_ready
+  until: rke2_agent_node_ready.rc == 0 and rke2_agent_node_ready.stdout == "True"
+  retries: 60
+  delay: 10
+  changed_when: false
+  delegate_to: "{{ groups[server_group][0] }}"
+
+# Add the conventional worker role label at the API level.
+# Kubelet cannot set this reserved namespace label via --node-labels.
+- name: Check whether worker role label is present
+  ansible.builtin.command:
+    cmd: >
+      /var/lib/rancher/rke2/bin/kubectl
+      --kubeconfig /etc/rancher/rke2/rke2.yaml
+      get node {{ inventory_hostname }}
+      --show-labels
+      --no-headers
+  register: rke2_agent_node_labels
+  changed_when: false
+  delegate_to: "{{ groups[server_group][0] }}"
+
+- name: Add worker role label to agent node
+  when: "'node-role.kubernetes.io/worker' not in rke2_agent_node_labels.stdout"
+  ansible.builtin.command:
+    cmd: >
+      /var/lib/rancher/rke2/bin/kubectl
+      --kubeconfig /etc/rancher/rke2/rke2.yaml
+      label node {{ inventory_hostname }}
+      node-role.kubernetes.io/worker=
+      --overwrite
+  changed_when: true
+  delegate_to: "{{ groups[server_group][0] }}"

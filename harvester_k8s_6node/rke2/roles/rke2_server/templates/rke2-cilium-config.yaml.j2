@@ -1,0 +1,65 @@
+# Managed by Ansible — do not edit by hand
+# RKE2 picks this up automatically from the manifests directory.
+# Changes here trigger a Helm upgrade of the rke2-cilium release.
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-cilium
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # -----------------------------------------------------------------
+    # kube-proxy replacement
+    # cilium_k8s_host defaults to cluster_fqdn but can be overridden
+    # in group_vars/all.yml to a bare IP if DNS is not yet in place.
+    # -----------------------------------------------------------------
+    kubeProxyReplacement: true
+    k8sServiceHost: "{{ cilium_k8s_host | default(cluster_fqdn) }}"
+    k8sServicePort: "{{ api_port }}"
+
+    # -----------------------------------------------------------------
+    # SCTP
+    # -----------------------------------------------------------------
+    sctp:
+      enabled: true
+
+    # -----------------------------------------------------------------
+    # Hubble — observability
+    # -----------------------------------------------------------------
+    hubble:
+      enabled: true
+      relay:
+        enabled: true
+      ui:
+        enabled: true
+
+    # -----------------------------------------------------------------
+    # Dual-interface configuration
+    #
+    # mgmt_interface  ({{ mgmt_interface }}): management plane, Kubernetes API traffic
+    # traffic_interface ({{ traffic_interface }}): data plane, pod-to-pod and NodePort traffic
+    #
+    # Cilium attaches its eBPF programs to both interfaces.
+    # NodePort traffic is directed to the traffic interface so that
+    # external clients hit the dedicated network, not the management NIC.
+    # -----------------------------------------------------------------
+    devices:
+      - "{{ mgmt_interface }}"
+      - "{{ traffic_interface }}"
+
+    nodePort:
+      enabled: true
+      directRoutingDevice: "{{ traffic_interface }}"
+
+    # VXLAN tunnel mode — works across L3 boundaries without extra routing.
+    # Switch to routingMode: native + autoDirectNodeRoutes: true if your
+    # traffic network has full L2 adjacency between nodes and you want
+    # zero-overhead direct routing.
+    tunnelProtocol: vxlan
+
+    # -----------------------------------------------------------------
+    # IPAM — let Kubernetes assign per-node pod CIDRs
+    # -----------------------------------------------------------------
+    ipam:
+      mode: kubernetes
