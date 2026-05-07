@@ -100,20 +100,41 @@
     connect_timeout: 30
     post_reboot_delay: 20
 
-# Stage 1: confirm the node has registered at all (rc 0 = node object exists)
+# Stage 1: resolve the node name as seen by Kubernetes. This may differ
+# from the Ansible inventory alias (e.g. OS hostname vs inventory name).
 - name: Wait for agent node to appear in the cluster
   ansible.builtin.command:
     cmd: >
       /var/lib/rancher/rke2/bin/kubectl
       --kubeconfig /etc/rancher/rke2/rke2.yaml
-      get node {{ inventory_hostname }}
-      --no-headers
-  register: rke2_agent_node_exists
-  until: rke2_agent_node_exists.rc == 0
+      get nodes
+      -o jsonpath='{.items[*].metadata.name}'
+  register: rke2_agent_nodes_list
+  until: >
+    rke2_agent_nodes_list.rc == 0 and
+    (
+      inventory_hostname in (rke2_agent_nodes_list.stdout.split()) or
+      ansible_hostname in (rke2_agent_nodes_list.stdout.split()) or
+      ansible_fqdn in (rke2_agent_nodes_list.stdout.split())
+    )
   retries: 18
   delay: 10
   changed_when: false
   delegate_to: "{{ groups[server_group][0] }}"
+
+- name: Set Kubernetes node name for this agent
+  ansible.builtin.set_fact:
+    rke2_agent_node_name: >-
+      {% set names = rke2_agent_nodes_list.stdout.split() %}
+      {% if inventory_hostname in names %}
+      {{ inventory_hostname }}
+      {% elif ansible_hostname in names %}
+      {{ ansible_hostname }}
+      {% elif ansible_fqdn in names %}
+      {{ ansible_fqdn }}
+      {% else %}
+      {{ inventory_hostname }}
+      {% endif %}
 
 # Stage 2: wait for Cilium to finish initialising and flip the node Ready.
 # Cilium pulls several images (relay, UI) on first boot — allow 10 minutes.
@@ -122,7 +143,7 @@
     cmd: >
       /var/lib/rancher/rke2/bin/kubectl
       --kubeconfig /etc/rancher/rke2/rke2.yaml
-      get node {{ inventory_hostname }}
+      get node {{ rke2_agent_node_name }}
       -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
   register: rke2_agent_node_ready
   until: rke2_agent_node_ready.rc == 0 and rke2_agent_node_ready.stdout == "True"
@@ -138,7 +159,7 @@
     cmd: >
       /var/lib/rancher/rke2/bin/kubectl
       --kubeconfig /etc/rancher/rke2/rke2.yaml
-      get node {{ inventory_hostname }}
+      get node {{ rke2_agent_node_name }}
       --show-labels
       --no-headers
   register: rke2_agent_node_labels
@@ -151,7 +172,7 @@
     cmd: >
       /var/lib/rancher/rke2/bin/kubectl
       --kubeconfig /etc/rancher/rke2/rke2.yaml
-      label node {{ inventory_hostname }}
+      label node {{ rke2_agent_node_name }}
       node-role.kubernetes.io/worker=
       --overwrite
   changed_when: true
