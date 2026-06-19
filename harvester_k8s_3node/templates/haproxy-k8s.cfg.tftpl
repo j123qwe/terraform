@@ -1,0 +1,28 @@
+global
+  log /dev/log local0
+  log /dev/log local1 notice
+  daemon
+
+defaults
+  log global
+  mode tcp
+  option tcplog
+  timeout connect 5s
+  timeout client  50s
+  timeout server  50s
+
+listen k8s-api-6443
+  bind *:6443
+  mode tcp
+  balance roundrobin
+%{ for ip in master_ips ~}
+  server cp-${replace(ip, ".", "-")} ${ip}:6443 check
+%{ endfor ~}
+
+listen rke2-supervisor-9345
+  bind *:9345
+  mode tcp
+  balance roundrobin
+%{ for ip in master_ips ~}
+  server cp-${replace(ip, ".", "-")} ${ip}:9345 check
+%{ endfor ~}

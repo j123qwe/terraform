@@ -1,0 +1,22 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars to source control — it contains secrets.
+
+linode_token = "YOUR_LINODE_API_TOKEN"
+
+region        = "us-central"
+instance_type = "g6-standard-4"
+image         = "linode/ubuntu22.04"
+
+node_count        = 3
+node_label_prefix = "node"
+
+root_pass = "YOUR_SECURE_ROOT_PASSWORD"
+
+ssh_authorized_keys = [
+  "ssh-ed25519 AAAA... user@host",
+]
+
+tags = ["terraform", "compute"]
+
+private_ip      = true
+backups_enabled = false

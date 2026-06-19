@@ -1,0 +1,21 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Do NOT commit terraform.tfvars to source control — it contains secrets.
+
+vultr_api_key = "YOUR_VULTR_API_KEY"
+
+region = "dfw"
+plan   = "vc2-4c-8gb"
+os_id  = 1743
+
+node_count        = 3
+node_label_prefix = "node"
+hostname_prefix   = "node"
+
+# SSH key IDs from your Vultr account (Servers > SSH Keys)
+ssh_key_ids = [
+  "YOUR_VULTR_SSH_KEY_ID",
+]
+
+tags = ["terraform", "compute"]
+
+backups = "disabled"
