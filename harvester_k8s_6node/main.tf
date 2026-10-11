@@ -95,12 +95,6 @@ locals {
     ]
   }
 
-  vm_netplan_runcmd = [
-    "rm -f /etc/netplan/00-installer-config.yaml /etc/netplan/50-cloud-init.yaml || true",
-    "netplan generate",
-    "netplan apply",
-  ]
-
   vm_guest_agent_packages = ["qemu-guest-agent"]
 
   vm_guest_agent_runcmd = [
@@ -112,6 +106,33 @@ locals {
     master_ips = [for cidr in var.master_nic1_cidrs : split("/", cidr)[0]]
   })
 
+  haproxy_cloudinit_network_data = yamlencode({
+    version = 2
+    ethernets = {
+      nic1 = {
+        match = {
+          macaddress = lower(local.haproxy_nic1_mac)
+        }
+        dhcp4     = false
+        addresses = [var.haproxy_nic1_cidr]
+        routes = [{
+          to  = "default"
+          via = var.nic1_gateway
+        }]
+        nameservers = {
+          addresses = var.nic1_dns_servers
+        }
+      }
+      nic2 = {
+        match = {
+          macaddress = lower(local.haproxy_nic2_mac)
+        }
+        dhcp4     = false
+        addresses = [var.haproxy_nic2_cidr]
+      }
+    }
+  })
+
   haproxy_cloudinit_user_data = join("\n", [
     "#cloud-config",
     yamlencode(merge(local.vm_user_common, {
@@ -119,47 +140,13 @@ locals {
       packages       = concat(local.vm_guest_agent_packages, ["haproxy"])
       write_files = [
         {
-          path        = "/etc/netplan/99-harvester-static.yaml"
-          permissions = "0644"
-          content = yamlencode({
-            network = {
-              version = 2
-              ethernets = {
-                nic1 = {
-                  match = {
-                    macaddress = lower(local.haproxy_nic1_mac)
-                  }
-                  dhcp4     = false
-                  addresses = [var.haproxy_nic1_cidr]
-                  routes = [
-                    {
-                      to  = "default"
-                      via = var.nic1_gateway
-                    }
-                  ]
-                  nameservers = {
-                    addresses = var.nic1_dns_servers
-                  }
-                }
-                nic2 = {
-                  match = {
-                    macaddress = lower(local.haproxy_nic2_mac)
-                  }
-                  dhcp4     = false
-                  addresses = [var.haproxy_nic2_cidr]
-                }
-              }
-            }
-          })
-        },
-        {
-          path        = "/tmp/haproxy.cfg"
+          path        = "/var/lib/cloud/haproxy.cfg"
           permissions = "0644"
           content     = local.haproxy_k8s_config
         }
       ]
-      runcmd = concat(local.vm_netplan_runcmd, local.vm_guest_agent_runcmd, [
-        "install -o root -g root -m 0644 /tmp/haproxy.cfg /etc/haproxy/haproxy.cfg",
+      runcmd = concat(["set -e"], local.vm_guest_agent_runcmd, [
+        "install -o root -g root -m 0644 /var/lib/cloud/haproxy.cfg /etc/haproxy/haproxy.cfg",
         "haproxy -c -f /etc/haproxy/haproxy.cfg",
         "systemctl enable haproxy",
         "systemctl restart haproxy",
@@ -197,58 +184,48 @@ resource "harvester_virtualmachine" "masters" {
   }
 
   disk {
-    name               = "disk0"
-    type               = "disk"
-    size               = var.master_root_disk_size
-    bus                = "virtio"
-    boot_order         = 1
-    image              = var.image_id
-    auto_delete        = true
+    name        = "disk0"
+    type        = "disk"
+    size        = var.master_root_disk_size
+    bus         = "virtio"
+    boot_order  = 1
+    image       = var.image_id
+    auto_delete = true
   }
 
   cloudinit {
+    network_data = yamlencode({
+      version = 2
+      ethernets = {
+        nic1 = {
+          match = {
+            macaddress = lower(local.master_nic1_macs[count.index])
+          }
+          dhcp4     = false
+          addresses = [var.master_nic1_cidrs[count.index]]
+          routes = [{
+            to  = "default"
+            via = var.nic1_gateway
+          }]
+          nameservers = {
+            addresses = var.nic1_dns_servers
+          }
+        }
+        nic2 = {
+          match = {
+            macaddress = lower(local.master_nic2_macs[count.index])
+          }
+          dhcp4     = false
+          addresses = [var.master_nic2_cidrs[count.index]]
+        }
+      }
+    })
     user_data = join("\n", [
       "#cloud-config",
       yamlencode(merge(local.vm_user_common, {
         package_update = true
         packages       = local.vm_guest_agent_packages
-        write_files = [
-          {
-            path        = "/etc/netplan/99-harvester-static.yaml"
-            permissions = "0644"
-            content = yamlencode({
-              network = {
-                version = 2
-                ethernets = {
-                  nic1 = {
-                    match = {
-                      macaddress = lower(local.master_nic1_macs[count.index])
-                    }
-                    dhcp4     = false
-                    addresses = [var.master_nic1_cidrs[count.index]]
-                    routes = [
-                      {
-                        to  = "default"
-                        via = var.nic1_gateway
-                      }
-                    ]
-                    nameservers = {
-                      addresses = var.nic1_dns_servers
-                    }
-                  }
-                  nic2 = {
-                    match = {
-                      macaddress = lower(local.master_nic2_macs[count.index])
-                    }
-                    dhcp4     = false
-                    addresses = [var.master_nic2_cidrs[count.index]]
-                  }
-                }
-              }
-            })
-          }
-        ]
-        runcmd = concat(local.vm_netplan_runcmd, local.vm_guest_agent_runcmd)
+        runcmd         = local.vm_guest_agent_runcmd
       }))
     ])
   }
@@ -277,13 +254,13 @@ resource "harvester_virtualmachine" "workers" {
   }
 
   disk {
-    name               = "disk0"
-    type               = "disk"
-    size               = var.worker_root_disk_size
-    bus                = "virtio"
-    boot_order         = 1
-    image              = var.image_id
-    auto_delete        = true
+    name        = "disk0"
+    type        = "disk"
+    size        = var.worker_root_disk_size
+    bus         = "virtio"
+    boot_order  = 1
+    image       = var.image_id
+    auto_delete = true
   }
 
   dynamic "disk" {
@@ -299,7 +276,8 @@ resource "harvester_virtualmachine" "workers" {
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.workers[count.index].name
+    user_data_secret_name    = harvester_cloudinit_secret.workers[count.index].name
+    network_data_secret_name = harvester_cloudinit_secret.workers[count.index].name
   }
 }
 
@@ -309,6 +287,33 @@ resource "harvester_cloudinit_secret" "workers" {
   name      = "${var.worker_hostname_prefix}-${count.index + 1}-cloudinit"
   namespace = kubernetes_namespace.vm_namespace.metadata[0].name
 
+  network_data = yamlencode({
+    version = 2
+    ethernets = {
+      nic1 = {
+        match = {
+          macaddress = lower(local.worker_nic1_macs[count.index])
+        }
+        dhcp4     = false
+        addresses = [var.worker_nic1_cidrs[count.index]]
+        routes = [{
+          to  = "default"
+          via = var.nic1_gateway
+        }]
+        nameservers = {
+          addresses = var.nic1_dns_servers
+        }
+      }
+      nic2 = {
+        match = {
+          macaddress = lower(local.worker_nic2_macs[count.index])
+        }
+        dhcp4     = false
+        addresses = [var.worker_nic2_cidrs[count.index]]
+      }
+    }
+  })
+
   user_data = join("\n", [
     "#cloud-config",
     yamlencode(merge(local.vm_user_common, {
@@ -317,45 +322,10 @@ resource "harvester_cloudinit_secret" "workers" {
         local.vm_guest_agent_packages,
         var.worker_extra_disk_size != "" ? ["parted", "xfsprogs"] : []
       )
-      write_files = concat([
-        {
-          path        = "/etc/netplan/99-harvester-static.yaml"
-          permissions = "0644"
-          content = yamlencode({
-            network = {
-              version = 2
-              ethernets = {
-                nic1 = {
-                  match = {
-                    macaddress = lower(local.worker_nic1_macs[count.index])
-                  }
-                  dhcp4     = false
-                  addresses = [var.worker_nic1_cidrs[count.index]]
-                  routes = [
-                    {
-                      to  = "default"
-                      via = var.nic1_gateway
-                    }
-                  ]
-                  nameservers = {
-                    addresses = var.nic1_dns_servers
-                  }
-                }
-                nic2 = {
-                  match = {
-                    macaddress = lower(local.worker_nic2_macs[count.index])
-                  }
-                  dhcp4     = false
-                  addresses = [var.worker_nic2_cidrs[count.index]]
-                }
-              }
-            }
-          })
-        }
-        ], var.worker_extra_disk_size != "" ? [{
-          path        = "/usr/local/sbin/setup-worker-extra-disk.sh"
-          permissions = "0755"
-          content     = <<-EOT
+      write_files = var.worker_extra_disk_size != "" ? [{
+        path        = "/usr/local/sbin/setup-worker-extra-disk.sh"
+        permissions = "0755"
+        content     = <<-EOT
             #!/usr/bin/env bash
             set -euo pipefail
 
@@ -420,9 +390,8 @@ resource "harvester_cloudinit_secret" "workers" {
 
             mountpoint -q "$MOUNT_PATH" || mount "$MOUNT_PATH"
           EOT
-      }] : [])
+      }] : []
       runcmd = concat(
-        local.vm_netplan_runcmd,
         local.vm_guest_agent_runcmd,
         var.worker_extra_disk_size != "" ? ["/usr/local/sbin/setup-worker-extra-disk.sh"] : []
       )
@@ -431,9 +400,10 @@ resource "harvester_cloudinit_secret" "workers" {
 }
 
 resource "harvester_cloudinit_secret" "haproxy" {
-  name      = "${var.haproxy_hostname}-cloudinit"
-  namespace = kubernetes_namespace.vm_namespace.metadata[0].name
-  user_data = local.haproxy_cloudinit_user_data
+  name         = "${var.haproxy_hostname}-cloudinit"
+  namespace    = kubernetes_namespace.vm_namespace.metadata[0].name
+  user_data    = local.haproxy_cloudinit_user_data
+  network_data = local.haproxy_cloudinit_network_data
 }
 
 resource "harvester_virtualmachine" "haproxy" {
@@ -457,16 +427,17 @@ resource "harvester_virtualmachine" "haproxy" {
   }
 
   disk {
-    name               = "disk0"
-    type               = "disk"
-    size               = var.master_root_disk_size
-    bus                = "virtio"
-    boot_order         = 1
-    image              = var.image_id
-    auto_delete        = true
+    name        = "disk0"
+    type        = "disk"
+    size        = var.master_root_disk_size
+    bus         = "virtio"
+    boot_order  = 1
+    image       = var.image_id
+    auto_delete = true
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.haproxy.name
+    user_data_secret_name    = harvester_cloudinit_secret.haproxy.name
+    network_data_secret_name = harvester_cloudinit_secret.haproxy.name
   }
 }
