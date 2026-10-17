@@ -1,0 +1,7 @@
+cluster_label = "dev-lke"
+region        = "us-ord"
+node_type     = "g6-standard-2"
+node_count    = 3
+# k8s_version     = "1.34"                        # omit for latest GA
+# env_file        = "~/.secrets/linode.env"         # omit for ./.env
+# kubeconfig_path = "~/.kube/linode-dev-lke.yaml" # omit for ./kubeconfig-<label>.yaml

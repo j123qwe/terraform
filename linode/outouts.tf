@@ -22,3 +22,4 @@ output "node_ipv6" {
   description = "IPv6 addresses of each node"
   value       = linode_instance.node[*].ipv6
 }
+
