@@ -44,3 +44,32 @@ variable "env_file" {
   type        = string
   default     = null
 }
+
+variable "domain" {
+  description = "Linode-hosted DNS zone used for DNS-01 challenges and app hostnames (must already exist in Linode DNS)"
+  type        = string
+}
+
+variable "acme_email" {
+  description = "Email for the Let's Encrypt account (expiry notices)"
+  type        = string
+}
+
+variable "cert_issuer" {
+  description = "ClusterIssuer used for app certificates. Defaults to staging (untrusted certs, no rate limits); set to letsencrypt-prod for trusted certificates."
+  type        = string
+  default     = "letsencrypt-staging"
+}
+
+variable "grafana_host" {
+  description = "Grafana hostname; defaults to grafana.<domain>"
+  type        = string
+  default     = null
+}
+
+variable "dns_token" {
+  description = "Linode token (Domains read/write) for the cert-manager DNS-01 webhook. Only needed if LINODE_TOKEN is not in the .env file."
+  type        = string
+  default     = null
+  sensitive   = true
+}

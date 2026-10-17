@@ -17,3 +17,16 @@ output "kubeconfig_path" {
 output "kubectl_hint" {
   value = "export KUBECONFIG=${abspath(local_sensitive_file.kubeconfig.filename)} && kubectl get nodes"
 }
+
+output "grafana_url" {
+  value = "https://${local.grafana_host}"
+}
+
+output "grafana_admin_password" {
+  value     = random_password.grafana.result
+  sensitive = true
+}
+
+output "traefik_lb_ip" {
+  value = local.traefik_lb_ip
+}

@@ -1,0 +1,22 @@
+{{- range $name, $server := dict "letsencrypt-staging" "https://acme-staging-v02.api.letsencrypt.org/directory" "letsencrypt-prod" "https://acme-v02.api.letsencrypt.org/directory" }}
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ $name }}
+spec:
+  acme:
+    server: {{ $server }}
+    email: {{ $.Values.email | quote }}
+    privateKeySecretRef:
+      name: {{ $name }}-account-key
+    solvers:
+      - dns01:
+          webhook:
+            solverName: linode
+            groupName: {{ $.Values.webhookGroupName }}
+            config:
+              apiKeySecretRef:
+                name: linode-credentials
+                key: token
+{{- end }}
