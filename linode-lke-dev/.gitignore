@@ -1,0 +1,10 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+kubeconfig-*.yaml
+crash.log
+.env
+.env.*
+!.env.example
