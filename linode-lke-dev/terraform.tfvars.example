@@ -7,4 +7,4 @@ node_count    = 3
 # kubeconfig_path = "~/.kube/linode-dev-lke.yaml" # omit for ./kubeconfig-<label>.yaml
 acme_email = "you@example.com"
 domain     = "dev.example.com" # Linode-hosted DNS zone
-# cert_issuer = "letsencrypt-prod"                # default is letsencrypt-staging (untrusted certs)
+# cert_issuer = "letsencrypt-prod"                # default is selfsigned; also: letsencrypt-staging

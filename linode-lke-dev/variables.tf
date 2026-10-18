@@ -56,9 +56,9 @@ variable "acme_email" {
 }
 
 variable "cert_issuer" {
-  description = "ClusterIssuer used for app certificates. Defaults to staging (untrusted certs, no rate limits); set to letsencrypt-prod for trusted certificates."
+  description = "ClusterIssuer used for app certificates. Defaults to selfsigned (no ACME, untrusted); use letsencrypt-staging (untrusted, no rate limits) or letsencrypt-prod for ACME certificates."
   type        = string
-  default     = "letsencrypt-staging"
+  default     = "selfsigned"
 }
 
 variable "grafana_host" {
