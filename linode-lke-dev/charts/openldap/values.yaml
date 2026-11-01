@@ -1,0 +1,24 @@
+baseDn: ""
+domain: ""
+organisation: "Test Directory"
+host: ""      # public LDAP hostname (certificate + TLS SNI route)
+adminHost: "" # phpLDAPadmin hostname
+certIssuer: selfsigned
+tlsEnforce: false
+storageSize: 10Gi
+
+image: osixia/openldap:1.5.0
+adminImage: osixia/phpldapadmin:0.9.0
+
+# Secrets created by Terraform
+adminSecret: openldap-credentials   # keys: admin-password, config-password
+passwordsSecret: openldap-passwords # one key per passwordEntries[].secretKey
+
+adminDn: ""
+bindDn: ""
+# DNs whose password is set by the post-install Job
+passwordEntries: []
+# users: [{uid, givenName, sn, cn, mail, uidNumber, gidNumber}]
+users: []
+# groups: [{name, gidNumber, members: [uid]}]
+groups: []

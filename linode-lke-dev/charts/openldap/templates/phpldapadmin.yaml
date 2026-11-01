@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpldapadmin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phpldapadmin
+  template:
+    metadata:
+      labels:
+        app: phpldapadmin
+    spec:
+      containers:
+        - name: phpldapadmin
+          image: {{ .Values.adminImage }}
+          env:
+            # Talk to slapd in-cluster over plain LDAP; TLS to browsers ends at Traefik
+            - { name: PHPLDAPADMIN_LDAP_HOSTS, value: openldap }
+            - { name: PHPLDAPADMIN_LDAP_CLIENT_TLS, value: {{ .Values.tlsEnforce | quote }} }
+            - { name: PHPLDAPADMIN_LDAP_CLIENT_TLS_REQCERT, value: never }
+            - { name: PHPLDAPADMIN_HTTPS, value: "false" }
+            - { name: PHPLDAPADMIN_TRUST_PROXY_SSL, value: "true" }
+          ports:
+            - { name: http, containerPort: 80 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpldapadmin
+spec:
+  selector:
+    app: phpldapadmin
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: phpldapadmin
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.certIssuer }}
+spec:
+  ingressClassName: traefik
+  tls:
+    - secretName: phpldapadmin-tls
+      hosts: [{{ .Values.adminHost | quote }}]
+  rules:
+    - host: {{ .Values.adminHost | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: phpldapadmin, port: { name: http } }

@@ -8,3 +8,9 @@ node_count    = 3
 acme_email = "you@example.com"
 domain     = "dev.example.com" # Linode-hosted DNS zone
 # cert_issuer = "letsencrypt-prod"                # default is selfsigned; also: letsencrypt-staging
+
+# ldap_host          = "ldap.example.com"     # default ldap.<domain>
+# ldap_admin_host    = "ldapadmin.example.com" # default ldapadmin.<domain>
+# ldap_allowed_cidrs = ["203.0.113.5/32"]      # NodeBalancer firewall (all ports); default open
+# ldap_tls_enforce   = false
+# deploy_ldap        = true                  # unset = Terraform prompts each run; set to skip the prompt
