@@ -8,3 +8,4 @@ crash.log
 .env
 .env.*
 !.env.example
+ldap-users.csv

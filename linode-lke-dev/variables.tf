@@ -73,3 +73,32 @@ variable "dns_token" {
   default     = null
   sensitive   = true
 }
+
+variable "ldap_host" {
+  description = "LDAP/LDAPS hostname (certificate SAN); defaults to ldap.<domain>"
+  type        = string
+  default     = null
+}
+
+variable "ldap_admin_host" {
+  description = "phpLDAPadmin hostname; defaults to ldapadmin.<domain>"
+  type        = string
+  default     = null
+}
+
+variable "ldap_allowed_cidrs" {
+  description = "IPv4 CIDRs allowed through the NodeBalancer firewall. Empty = open to the internet. NOTE: applies to the whole shared NodeBalancer (Grafana and phpLDAPadmin too)."
+  type        = list(string)
+  default     = []
+}
+
+variable "ldap_tls_enforce" {
+  description = "Require TLS (STARTTLS or LDAPS) for all LDAP binds. Off by default so plaintext clients can be tested."
+  type        = bool
+  default     = false
+}
+
+variable "deploy_ldap" {
+  description = "Deploy the test OpenLDAP server (and its GUI)? true or false. Has no default, so Terraform prompts every run; set it in tfvars or with -var to skip the prompt."
+  type        = bool
+}

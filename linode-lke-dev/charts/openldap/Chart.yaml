@@ -1,0 +1,4 @@
+apiVersion: v2
+name: openldap
+description: Test OpenLDAP (osixia) with LDAPS via Traefik TCP passthrough, plus phpLDAPadmin
+version: 0.1.0

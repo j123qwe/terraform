@@ -30,3 +30,42 @@ output "grafana_admin_password" {
 output "traefik_lb_ip" {
   value = local.traefik_lb_ip
 }
+
+# LDAP outputs are null when deploy_ldap = false
+output "ldap_url" {
+  value = var.deploy_ldap ? "ldap://${local.ldap_host}:389" : null
+}
+
+output "ldaps_url" {
+  value = var.deploy_ldap ? "ldaps://${local.ldap_host}:636" : null
+}
+
+output "ldap_base_dn" {
+  value = var.deploy_ldap ? local.ldap_base_dn : null
+}
+
+output "ldap_bind_dn" {
+  value = var.deploy_ldap ? local.ldap_bind_dn : null
+}
+
+output "ldap_bind_password" {
+  value     = one(random_password.ldap_bind[*].result)
+  sensitive = true
+}
+
+output "ldap_admin_dn" {
+  value = var.deploy_ldap ? local.ldap_admin_dn : null
+}
+
+output "ldap_admin_password" {
+  value     = one(random_password.ldap_admin[*].result)
+  sensitive = true
+}
+
+output "ldap_admin_gui_url" {
+  value = var.deploy_ldap ? "https://${local.ldap_admin_host}" : null
+}
+
+output "ldap_users_csv" {
+  value = var.deploy_ldap ? abspath(local_sensitive_file.ldap_users_csv[0].filename) : null
+}

@@ -17,20 +17,41 @@ resource "helm_release" "traefik" {
     # LoadBalancer Service -> Linode NodeBalancer
     service = {
       type = "LoadBalancer"
-      annotations = {
-        "service.beta.kubernetes.io/linode-loadbalancer-throttle" = "4"
-      }
+      annotations = merge(
+        { "service.beta.kubernetes.io/linode-loadbalancer-throttle" = "4" },
+        # NodeBalancer firewall: applies to every port on the shared NodeBalancer (80/443/389/636)
+        length(var.ldap_allowed_cidrs) == 0 ? {} : {
+          "service.beta.kubernetes.io/linode-loadbalancer-firewall-acl" = jsonencode({ allowList = { ipv4 = var.ldap_allowed_cidrs } })
+        }
+      )
     }
     ingressClass = { enabled = true, isDefaultClass = true }
-    ports = {
-      web = {
-        http = {
-          redirections = {
-            entryPoint = { to = "websecure", scheme = "https", permanent = true }
+    ports = merge(
+      var.deploy_ldap ? {
+        # Raw TCP entrypoints for OpenLDAP (container ports are unprivileged; the Service exposes 389/636)
+        ldap = {
+          port        = 8389
+          exposedPort = 389
+          expose      = { default = true }
+          protocol    = "TCP"
+        }
+        ldaps = {
+          port        = 8636
+          exposedPort = 636
+          expose      = { default = true }
+          protocol    = "TCP"
+        }
+      } : {},
+      {
+        web = {
+          http = {
+            redirections = {
+              entryPoint = { to = "websecure", scheme = "https", permanent = true }
+            }
           }
         }
       }
-    }
+    )
   })]
 
   depends_on = [linode_lke_cluster.dev]
@@ -163,5 +184,10 @@ resource "helm_release" "monitoring" {
     kubeProxy             = { enabled = false }
   })]
 
-  depends_on = [helm_release.cluster_issuers, linode_domain_record.grafana]
+  depends_on = [
+    helm_release.cluster_issuers,
+    linode_domain_record.grafana,
+    kubernetes_annotations.sc_delete_default,
+    kubernetes_annotations.sc_retain_not_default,
+  ]
 }

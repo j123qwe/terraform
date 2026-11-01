@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openldap
+spec:
+  serviceName: openldap
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openldap
+  template:
+    metadata:
+      labels:
+        app: openldap
+      annotations:
+        # Restart on seed/config changes (first-start bootstrap still only runs on an empty volume)
+        checksum/ldif: {{ include (print $.Template.BasePath "/configmap-ldif.yaml") . | sha256sum }}
+    spec:
+      # The image chowns its certs dir and reads bootstrap LDIF from /container/service, so give it
+      # writable copies of the (read-only) Secret/ConfigMap instead of mounting those directly.
+      initContainers:
+        - name: stage-files
+          image: {{ .Values.image }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              cp /src/tls/tls.crt /out/certs/ldap.crt
+              cp /src/tls/tls.key /out/certs/ldap.key
+              # tls.crt carries the full chain; slapd only uses this file to build it
+              cp /src/tls/tls.crt /out/certs/ca.crt
+              # Start from the image's own bootstrap LDIF, then override memberOf and add the seed files
+              cp -a /container/service/slapd/assets/config/bootstrap/ldif/. /out/ldif/
+              cp /src/ldif/03-memberOf.ldif /out/ldif/
+              mkdir -p /out/ldif/custom
+              cp /src/ldif/0[12]-*.ldif /out/ldif/custom/
+          volumeMounts:
+            - { name: tls-src, mountPath: /src/tls, readOnly: true }
+            - { name: ldif-src, mountPath: /src/ldif, readOnly: true }
+            - { name: certs, mountPath: /out/certs }
+            - { name: ldif, mountPath: /out/ldif }
+      containers:
+        - name: openldap
+          image: {{ .Values.image }}
+          env:
+            - { name: LDAP_ORGANISATION, value: {{ .Values.organisation | quote }} }
+            - { name: LDAP_DOMAIN, value: {{ .Values.domain | quote }} }
+            - name: LDAP_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.adminSecret }}, key: admin-password } }
+            - name: LDAP_CONFIG_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.adminSecret }}, key: config-password } }
+            # The image deletes its bootstrap dirs after setup, which fails on our mount points
+            - { name: LDAP_REMOVE_CONFIG_AFTER_SETUP, value: "false" }
+            - { name: LDAP_TLS, value: "true" }
+            - { name: LDAP_TLS_CRT_FILENAME, value: ldap.crt }
+            - { name: LDAP_TLS_KEY_FILENAME, value: ldap.key }
+            - { name: LDAP_TLS_CA_CRT_FILENAME, value: ca.crt }
+            - { name: LDAP_TLS_VERIFY_CLIENT, value: never }
+            - { name: LDAP_TLS_ENFORCE, value: {{ .Values.tlsEnforce | quote }} }
+          ports:
+            - { name: ldap, containerPort: 389 }
+            - { name: ldaps, containerPort: 636 }
+          readinessProbe:
+            tcpSocket: { port: ldaps }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/ldap, subPath: data }
+            - { name: data, mountPath: /etc/ldap/slapd.d, subPath: config }
+            - { name: certs, mountPath: /container/service/slapd/assets/certs }
+            - { name: ldif, mountPath: /container/service/slapd/assets/config/bootstrap/ldif }
+      volumes:
+        - name: tls-src
+          secret:
+            secretName: openldap-tls
+        - name: ldif-src
+          configMap:
+            name: openldap-ldif
+        - name: certs
+          emptyDir: {}
+        - name: ldif
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.storageSize }}
