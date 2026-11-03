@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+trap 'echo "RKE2 installation failed on ${node_name} at line $LINENO. Inspect journalctl -u rke2-server -u rke2-agent." >&2' ERR
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y curl ca-certificates open-iscsi nfs-common
+systemctl enable --now iscsid
+swapoff -a
+sed -i '/^[^#].*[[:space:]]swap[[:space:]]/s/^/#/' /etc/fstab
+hostnamectl set-hostname '${node_name}'
+modprobe overlay
+modprobe br_netfilter
+printf '%s\n' overlay br_netfilter > /etc/modules-load.d/rke2.conf
+cat > /etc/sysctl.d/90-rke2.conf <<'SYSCTL'
+net.ipv4.ip_forward = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+SYSCTL
+sysctl --system
+
+install -d -m 0700 /etc/rancher/rke2
+cat > /etc/rancher/rke2/config.yaml <<'RKE2_CONFIG'
+${config}
+RKE2_CONFIG
+chmod 0600 /etc/rancher/rke2/config.yaml
+
+%{ if is_server ~}
+install -d -m 0700 /var/lib/rancher/rke2/server/manifests
+cat > /var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml <<'CILIUM'
+${cilium_config}
+CILIUM
+%{ if is_seed ~}
+cat > /var/lib/rancher/rke2/server/manifests/linode-ccm-config.yaml <<'LINODE_CCM_CONFIG'
+${ccm_config}
+LINODE_CCM_CONFIG
+cat > /var/lib/rancher/rke2/server/manifests/linode-cloud.yaml <<'LINODE_CLOUD'
+${cloud_manifests}
+LINODE_CLOUD
+%{ endif ~}
+%{ endif ~}
+
+curl --fail --show-error --location --retry 5 https://get.rke2.io --output /root/install-rke2.sh
+INSTALL_RKE2_VERSION='${rke2_version}' INSTALL_RKE2_TYPE='${is_server ? "server" : "agent"}' sh /root/install-rke2.sh
+rm /root/install-rke2.sh
+systemctl enable rke2-${is_server ? "server" : "agent"}
+systemctl restart rke2-${is_server ? "server" : "agent"}
+
+%{ if is_server ~}
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+for attempt in $(seq 1 120); do
+  if /var/lib/rancher/rke2/bin/kubectl get --raw=/readyz >/dev/null 2>&1; then
+    echo '${node_name}: Kubernetes API is ready.'
+    exit 0
+  fi
+  sleep 5
+done
+echo '${node_name}: Kubernetes API did not become ready within 10 minutes.' >&2
+exit 1
+%{ else ~}
+echo '${node_name}: RKE2 agent started; cluster-wide readiness is checked after all nodes join.'
+%{ endif ~}

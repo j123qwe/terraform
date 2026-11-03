@@ -1,0 +1,16 @@
+cluster_label = "dev-rke2"
+region        = "us-ord"
+master_count  = 3 # Only 1 or 3; 3 provides control-plane/etcd HA.
+worker_count  = 3
+master_type   = "g6-standard-4"
+worker_type   = "g6-standard-4"
+
+# SSH and Kubernetes API access default to public IPv4 for ephemeral labs.
+# admin_allowed_cidrs = ["203.0.113.5/32"] # Optional restriction.
+
+ssh_public_key_path  = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+# rke2_version    = "v1.37.1+rke2r1"
+# env_file        = "~/.secrets/linode.env"
+# kubeconfig_path = "~/.kube/linode-rke2.yaml"
+# Supply a separate runtime API token via TF_VAR_cloud_token if desired.
