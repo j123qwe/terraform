@@ -9,13 +9,8 @@ resource "helm_release" "traefik" {
 
   values = [yamlencode({
     service = {
-      type = "LoadBalancer"
-      annotations = merge(
-        { "service.beta.kubernetes.io/linode-loadbalancer-throttle" = "4" },
-        length(var.ingress_allowed_cidrs) == 0 ? {} : {
-          "service.beta.kubernetes.io/linode-loadbalancer-firewall-acl" = jsonencode({ allowList = { ipv4 = var.ingress_allowed_cidrs } })
-        }
-      )
+      type        = "LoadBalancer"
+      annotations = { "service.beta.kubernetes.io/linode-loadbalancer-throttle" = "4" }
     }
     ingressClass = { enabled = true, isDefaultClass = true }
     ports = {

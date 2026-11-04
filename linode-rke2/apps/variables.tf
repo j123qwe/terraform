@@ -55,13 +55,3 @@ variable "grafana_host" {
   type        = string
   default     = null
 }
-
-variable "ingress_allowed_cidrs" {
-  description = "IPv4 CIDRs allowed through the Traefik NodeBalancer firewall. Empty means public HTTP/HTTPS."
-  type        = list(string)
-  default     = []
-  validation {
-    condition     = alltrue([for cidr in var.ingress_allowed_cidrs : can(cidrnetmask(cidr))])
-    error_message = "All ingress_allowed_cidrs entries must be IPv4 CIDRs."
-  }
-}

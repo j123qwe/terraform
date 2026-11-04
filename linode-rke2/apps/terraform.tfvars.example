@@ -3,6 +3,5 @@ domain        = "dev.example.com" # Existing Linode DNS zone.
 acme_email    = "you@example.com"
 # cert_issuer          = "letsencrypt-prod" # Default selfsigned; also letsencrypt-staging.
 # grafana_host         = "grafana.dev.example.com"
-# ingress_allowed_cidrs = ["203.0.113.5/32"] # Default public HTTP/HTTPS.
 # kubeconfig_path      = "~/.kube/linode-rke2.yaml" # If overridden in infrastructure.
 # env_file             = "~/.secrets/linode.env" # Default ../.env.

@@ -106,9 +106,6 @@ Override `env_file`/`kubeconfig_path` there too if customized in the infrastruct
 root. `dns_token` can separately scope cert-manager's token to DNS changes.
 `cert_issuer` defaults to `selfsigned` (untrusted); alternatives are
 `letsencrypt-staging` (untrusted, testing) and `letsencrypt-prod`.
-`ingress_allowed_cidrs` restricts the **application** NodeBalancer; by default
-ports 80/443 are public. Application ingress restrictions do not affect API access.
-
 Unlike managed LKE, control-plane monitoring is enabled. Etcd metrics use the
 private node port 2381; scheduler/controller-manager bind metrics listeners to
 node interfaces, protected by the node firewall. Grafana and Prometheus use
