@@ -1,0 +1,11 @@
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: traefik-static
+spec:
+  blocks:
+    - cidr: {{ printf "%s/32" .Values.ip | quote }}
+  serviceSelector:
+    matchLabels:
+      io.kubernetes.service.namespace: traefik
+      io.kubernetes.service.name: traefik

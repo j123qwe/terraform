@@ -1,0 +1,4 @@
+apiVersion: v2
+name: traefik-ip-pool
+description: Dedicated Cilium LoadBalancer IP pool for Traefik
+version: 0.1.0
