@@ -25,6 +25,10 @@ run "application_stack" {
   command = plan
 
   assert {
+    condition     = helm_release.longhorn.chart == "longhorn" && helm_release.longhorn.namespace == "longhorn-system" && yamldecode(helm_release.longhorn.values[0]).persistence.defaultClass && yamldecode(helm_release.longhorn.values[0]).persistence.defaultClassReplicaCount == 1
+    error_message = "Longhorn must provide the default storage class with one replica."
+  }
+  assert {
     condition     = yamldecode(helm_release.traefik.values[0]).service.spec.type == "LoadBalancer" && yamldecode(helm_release.traefik.values[0]).service.spec.externalTrafficPolicy == "Cluster" && yamldecode(helm_release.traefik.values[0]).service.annotations["lbipam.cilium.io/ips"] == "192.0.2.205" && length(helm_release.traefik_ip_pool) == 0
     error_message = "Traefik must use a Cilium-compatible LoadBalancer Service."
   }

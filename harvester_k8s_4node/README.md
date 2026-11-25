@@ -12,9 +12,9 @@ Each VM has two statically configured NICs, matched by cloud-init using their
 generated MAC addresses without renaming them. RKE2 uses the primary IP
 for node communication. The control-plane node is tainted and excluded from
 the L2 policy. RKE2's bundled Multus and Cilium provide pod networking.
-The same Terraform root installs Traefik, cert-manager, and
-kube-prometheus-stack after the cluster is ready. No storage provisioner is
-installed. Multus does not automatically create secondary pod networks.
+The same Terraform root installs Longhorn, Traefik, cert-manager, and
+kube-prometheus-stack after the cluster is ready. Multus does not
+automatically create secondary pod networks.
 
 ## Cilium and addressing
 
@@ -55,8 +55,13 @@ size it for the number of announced services using Cilium's guidance.
   Destroy deletes the Terraform-created namespace and its contents.
 - An Ubuntu 24.04 cloud image with cloud-init/netplan, systemd, and a kernel
   supported by the bundled Cilium version. Nodes need outbound access to Ubuntu
-  repositories, the RKE2 installer and release artifacts. Harvester's guest
-  agent package is installed during cloud-init.
+  repositories, the RKE2 installer and release artifacts, and the Longhorn
+  container images. Harvester's guest agent package is installed during
+  cloud-init. Bootstrap installs `open-iscsi` and `nfs-common` and enables
+  `iscsid` for Longhorn.
+- Longhorn 1.13.0 requires Kubernetes 1.34 or newer, privileged workloads, and
+  a supported host filesystem with mount propagation. See the
+  [Longhorn installation requirements](https://longhorn.io/docs/1.13.0/deploy/install/).
 - Two existing Harvester networks, unique static addresses, gateway and DNS.
   The machine running Terraform must reach all primary IPs over SSH and the
   server over TCP 6443. Nodes need mutual RKE2/Cilium connectivity; see the
@@ -78,6 +83,8 @@ export KUBECONFIG="$(terraform output -raw kubeconfig_path)"
 kubectl get nodes -o wide
 kubectl -n kube-system get pods
 kubectl get ciliumloadbalancerippools,ciliuml2announcementpolicies
+kubectl -n longhorn-system get pods
+kubectl get storageclass
 ```
 
 Terraform waits for cloud-init, installs the server before the workers, retrieves
@@ -113,6 +120,25 @@ name in the ingress and certificate. The selected self-signed issuer does not
 use `acme_email`; the value is reserved for future ACME configuration. No
 Let's Encrypt issuers, DNS challenge solvers, or DNS records are created.
 
+### Storage
+
+Longhorn provides the default `longhorn` StorageClass for dynamically
+provisioned PVCs. Its volumes use **one replica**: a node or disk failure can
+make a volume unavailable or permanently lose its data. Back up important
+data to a separate location; no backup target is configured here. The default
+class uses the `Delete` reclaim policy, so deleting a PVC deletes its volume.
+Longhorn stores data under `/var/lib/longhorn` on the workers' root disks;
+capacity is shared with the OS and Kubernetes. Monitor free space and Longhorn
+disk scheduling. The tainted control-plane node is not used for storage.
+
+Existing volumes are not changed, and Longhorn's UI-created volumes have
+their own replica setting. If another default StorageClass already exists,
+remove its default annotation to avoid ambiguous default selection. Bootstrap
+does not rerun on existing nodes, so verify their iSCSI and NFS prerequisites
+before applying to an existing cluster.
+
+### Ingress and monitoring
+
 The optional `traefik_load_balancer_ip` requests a specific IPv4 address. It
 may be inside the default pool or outside it on the announcement LAN. For an
 outside address Terraform creates a dedicated single-address Cilium pool
@@ -147,19 +173,26 @@ separately. Traefik redirects HTTP to HTTPS. The self-signed certificate is
 **not trusted by browsers** and is for lab use; no public certificate is issued.
 
 Grafana and Prometheus use **ephemeral storage**, as in `linode-lke-dev`:
-Grafana changes and metrics can be lost when pods are recreated. No PVCs or
-storage classes are provisioned. Scraping etcd, controller-manager,
+Grafana changes and metrics can be lost when pods are recreated. Neither app
+uses a PVC. Scraping etcd, controller-manager,
 scheduler, and kube-proxy is disabled because their metrics are not exposed
 by this configuration and Cilium replaces kube-proxy.
 
 Terraform state contains the generated Grafana password; the Kubernetes secret
 and sensitive Terraform output contain it too. Protect the state and restrict
-cluster access. A single destroy removes the apps before the infrastructure so
-Helm can still reach the cluster:
+cluster access. Before destroying the cluster, back up needed volume data,
+remove workloads and PVCs using Longhorn, then explicitly enable Longhorn's
+uninstall confirmation. This is destructive and permits the Helm uninstall
+hook to remove Longhorn data and resources:
 
 ```sh
+kubectl -n longhorn-system patch -p '{"value":"true"}' --type=merge settings.longhorn.io deleting-confirmation-flag
 terraform destroy
 ```
+
+See the [Longhorn uninstall guide](https://longhorn.io/docs/1.13.0/deploy/uninstall/)
+for details and recovery from an unsuccessful uninstall. Helm removes the apps
+before the infrastructure so it can still reach the cluster.
 
 Earlier versions used a separate `apps` state. Do not apply this unified
 configuration to an existing cluster whose apps are still managed by that

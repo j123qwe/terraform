@@ -40,6 +40,24 @@ locals {
   }
 }
 
+resource "helm_release" "longhorn" {
+  name             = "longhorn"
+  namespace        = "longhorn-system"
+  create_namespace = true
+  repository       = "https://charts.longhorn.io"
+  chart            = "longhorn"
+  version          = "1.13.0"
+  timeout          = 900
+  values = [yamlencode({
+    persistence = {
+      defaultClass             = true
+      defaultClassReplicaCount = 1
+    }
+  })]
+
+  depends_on = [terraform_data.kubeconfig_ready]
+}
+
 resource "helm_release" "traefik_ip_pool" {
   count            = local.traefik_ip == null ? 0 : (local.application_settings.traefik_ip_in_default_pool ? 0 : 1)
   name             = "traefik-ip-pool"
